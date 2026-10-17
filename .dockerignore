@@ -1,0 +1,7 @@
+*
+!go.mod
+!Dockerfile
+!internal/
+!internal/**
+!cmd/
+!cmd/**

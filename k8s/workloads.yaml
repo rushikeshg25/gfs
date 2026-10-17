@@ -1,0 +1,236 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: master
+  namespace: gfs
+spec:
+  selector: {app: master}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: master-peer
+  namespace: gfs
+spec:
+  clusterIP: None
+  selector: {app: master}
+  ports:
+    - {name: http, port: 8080, targetPort: 8080}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: chunk
+  namespace: gfs
+spec:
+  clusterIP: None
+  selector: {app: chunk}
+  ports:
+    - {name: http, port: 9000, targetPort: 9000}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: master
+  namespace: gfs
+spec:
+  serviceName: master-peer
+  replicas: 1
+  selector:
+    matchLabels: {app: master}
+  template:
+    metadata:
+      labels: {app: master}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      nodeSelector:
+        kubernetes.io/hostname: gfs-lab-control-plane
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: prepare-data
+          image: gfs-lab:local
+          imagePullPolicy: Never
+          command: [sh, -c, 'chown 10001:10001 /data && chmod 700 /data']
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      containers:
+        - name: master
+          image: gfs-lab:local
+          imagePullPolicy: Never
+          args: [master]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - name: GFS_TOKEN
+              valueFrom:
+                secretKeyRef: {name: gfs-auth, key: GFS_TOKEN}
+            - {name: DATA_DIR, value: /data}
+            - {name: CHUNK_SIZE, value: '1048576'}
+            - {name: NODE_TIMEOUT, value: 10s}
+            - {name: REPAIR_INTERVAL, value: 2s}
+          ports:
+            - {name: http, containerPort: 8080}
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {cpu: '1', memory: 256Mi}
+          readinessProbe:
+            httpGet: {path: /readyz, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - {name: data, mountPath: /data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: gfs-local
+        resources:
+          requests: {storage: 5Gi}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: chunk
+  namespace: gfs
+spec:
+  serviceName: chunk
+  replicas: 4
+  podManagementPolicy: Parallel
+  selector:
+    matchLabels: {app: chunk}
+  template:
+    metadata:
+      labels: {app: chunk}
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels: {app: chunk}
+              topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      initContainers:
+        - name: prepare-data
+          image: gfs-lab:local
+          imagePullPolicy: Never
+          command: [sh, -c, 'chown 10001:10001 /data && chmod 700 /data']
+          securityContext:
+            runAsUser: 0
+            runAsGroup: 0
+          volumeMounts:
+            - {name: data, mountPath: /data}
+      containers:
+        - name: chunk
+          image: gfs-lab:local
+          imagePullPolicy: Never
+          args: [chunk]
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - name: NODE_ID
+              valueFrom:
+                fieldRef: {fieldPath: metadata.name}
+            - {name: ADVERTISE_URL, value: 'http://$(NODE_ID).chunk.gfs.svc.cluster.local:9000'}
+            - {name: MASTER_URL, value: 'http://master:8080'}
+            - {name: DATA_DIR, value: /data}
+            - {name: HEARTBEAT_INTERVAL, value: 2s}
+            - name: GFS_TOKEN
+              valueFrom:
+                secretKeyRef: {name: gfs-auth, key: GFS_TOKEN}
+          ports:
+            - {name: http, containerPort: 9000}
+          resources:
+            requests: {cpu: 50m, memory: 32Mi}
+            limits: {cpu: '1', memory: 256Mi}
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - {name: data, mountPath: /data}
+  volumeClaimTemplates:
+    - metadata: {name: data}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: gfs-local
+        resources:
+          requests: {storage: 5Gi}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: client
+  namespace: gfs
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: client}
+  template:
+    metadata:
+      labels: {app: client}
+    spec:
+      automountServiceAccountToken: false
+      nodeSelector:
+        kubernetes.io/hostname: gfs-lab-control-plane
+      tolerations:
+        - key: node-role.kubernetes.io/control-plane
+          operator: Exists
+          effect: NoSchedule
+      securityContext:
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: client
+          image: gfs-lab:local
+          imagePullPolicy: Never
+          command: [sleep, infinity]
+          workingDir: /work
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: [ALL]}
+          env:
+            - {name: MASTER_URL, value: 'http://master:8080'}
+            - name: GFS_TOKEN
+              valueFrom:
+                secretKeyRef: {name: gfs-auth, key: GFS_TOKEN}
+          resources:
+            requests: {cpu: 10m, memory: 16Mi}
+            limits: {cpu: '1', memory: 128Mi}
+          volumeMounts:
+            - {name: work, mountPath: /work}
+      volumes:
+        - name: work
+          emptyDir: {}

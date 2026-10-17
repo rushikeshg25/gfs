@@ -1,0 +1,176 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: gfs
+---
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: gfs-local
+provisioner: kubernetes.io/no-provisioner
+volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gfs-master
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: gfs-local
+  local:
+    path: /gfs/data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [gfs-lab-control-plane]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-master-0
+  namespace: gfs
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gfs-local
+  volumeName: gfs-master
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gfs-chunk-0
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: gfs-local
+  local:
+    path: /gfs/data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [gfs-lab-worker]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-chunk-0
+  namespace: gfs
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gfs-local
+  volumeName: gfs-chunk-0
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gfs-chunk-1
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: gfs-local
+  local:
+    path: /gfs/data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [gfs-lab-worker2]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-chunk-1
+  namespace: gfs
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gfs-local
+  volumeName: gfs-chunk-1
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gfs-chunk-2
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: gfs-local
+  local:
+    path: /gfs/data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [gfs-lab-worker3]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-chunk-2
+  namespace: gfs
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gfs-local
+  volumeName: gfs-chunk-2
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: gfs-chunk-3
+spec:
+  capacity:
+    storage: 5Gi
+  accessModes: [ReadWriteOnce]
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: gfs-local
+  local:
+    path: /gfs/data
+  nodeAffinity:
+    required:
+      nodeSelectorTerms:
+        - matchExpressions:
+            - key: kubernetes.io/hostname
+              operator: In
+              values: [gfs-lab-worker4]
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: data-chunk-3
+  namespace: gfs
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: gfs-local
+  volumeName: gfs-chunk-3
+  resources:
+    requests:
+      storage: 5Gi
