@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"time"
 )
@@ -75,7 +76,10 @@ type RPC struct {
 }
 
 func NewRPC(token string) *RPC {
-	return &RPC{Token: token, HTTP: &http.Client{Timeout: TransferSeconds * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.DialContext = (&net.Dialer{Timeout: 2 * time.Second, KeepAlive: 30 * time.Second}).DialContext
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	return &RPC{Token: token, HTTP: &http.Client{Transport: transport, Timeout: TransferSeconds * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 func (c *RPC) Do(ctx context.Context, method, target string, body io.Reader, headers map[string]string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, method, target, body)

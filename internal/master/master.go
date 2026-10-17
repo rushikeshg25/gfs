@@ -165,8 +165,8 @@ func (m *Master) Begin(in p.Begin) (p.Plan, error) {
 	if err != nil {
 		return p.Plan{}, err
 	}
-	base := state.Files[in.Path].Generation
-	if in.Base != nil && *in.Base != base {
+	base := state.PathVersions[in.Path]
+	if in.Base != nil && *in.Base != state.Files[in.Path].Generation {
 		return p.Plan{}, p.Error(409, "file changed")
 	}
 	nodes := m.alive()

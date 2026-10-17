@@ -79,3 +79,106 @@ func TestCorruptCheckpointFailsClosed(t *testing.T) {
 		t.Fatal("accepted corrupted metadata")
 	}
 }
+
+func TestCheckpointChecksumAndPersistenceFailure(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Create(makeUpload("")); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	path := filepath.Join(root, "metadata.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed := strings.Replace(string(data), "/hello", "/other", 1)
+	if changed == string(data) {
+		t.Fatal("fixture was not modified")
+	}
+	os.WriteFile(path, []byte(changed), 0600)
+	if _, err = Open(root); err == nil {
+		t.Fatal("valid JSON corruption was accepted")
+	}
+	root = t.TempDir()
+	s, err = Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	// Force publication to fail without relying on root/non-root permission differences.
+	if err = os.Mkdir(filepath.Join(root, "metadata.json"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Create(makeUpload("")); err == nil {
+		t.Fatal("failed checkpoint acknowledged")
+	}
+	if _, err = s.Snapshot(); err == nil {
+		t.Fatal("store served after ambiguous persistence failure")
+	}
+}
+
+func TestDeletedPathRejectsStaleCreate(t *testing.T) {
+	s, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	stale, other := makeUpload(""), makeUpload("")
+	if err = s.Create(stale); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Create(other); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Commit(other.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Delete(other.Path, other.Generation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Commit(stale.ID, 2); err == nil {
+		t.Fatal("stale upload recreated a deleted path")
+	}
+}
+
+func TestVersionOneCheckpointUpgrade(t *testing.T) {
+	root := t.TempDir()
+	s, err := Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	u := makeUpload("")
+	if err = s.Create(u); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Commit(u.ID, 1); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.Snapshot()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	state.Version = 1
+	state.PathVersions = nil
+	old, err := encodeCheckpoint(state)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "metadata.json"), old, 0600); err != nil {
+		t.Fatal(err)
+	}
+	s, err = Open(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	state, err = s.Snapshot()
+	if err != nil || state.Version != 2 || state.PathVersions[u.Path] != u.Generation {
+		t.Fatal("checkpoint upgrade lost namespace version")
+	}
+}

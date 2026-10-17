@@ -27,3 +27,16 @@ func TestValidationAndLeases(t *testing.T) {
 		t.Fatal("accepted expired lease")
 	}
 }
+
+func TestBoundedJSON(t *testing.T) {
+	for _, body := range []string{`{"unexpected":true}`, `{} {}`, `not-json`} {
+		var out Begin
+		if err := Decode(strings.NewReader(body), 1024, &out); err == nil {
+			t.Fatalf("accepted %q", body)
+		}
+	}
+	var out Begin
+	if err := Decode(strings.NewReader(strings.Repeat(" ", 20)), 10, &out); err == nil {
+		t.Fatal("oversized JSON accepted")
+	}
+}

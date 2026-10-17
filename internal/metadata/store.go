@@ -3,6 +3,8 @@ package metadata
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"gfs/internal/durable"
@@ -13,15 +15,21 @@ import (
 	"sync"
 )
 
+type checkpoint struct {
+	State  json.RawMessage `json:"state"`
+	SHA256 string          `json:"sha256"`
+}
+
 type Record struct {
 	p.Spec
 	RetiredAt int64 `json:"retiredAt"`
 }
 type State struct {
-	Version int                   `json:"version"`
-	Files   map[string]p.Manifest `json:"files"`
-	Uploads map[string]p.Upload   `json:"uploads"`
-	Chunks  map[string]Record     `json:"chunks"`
+	PathVersions map[string]string     `json:"pathVersions"`
+	Version      int                   `json:"version"`
+	Files        map[string]p.Manifest `json:"files"`
+	Uploads      map[string]p.Upload   `json:"uploads"`
+	Chunks       map[string]Record     `json:"chunks"`
 }
 type Store struct {
 	mu       sync.Mutex
@@ -37,21 +45,55 @@ func Open(root string) (*Store, error) {
 	if err != nil {
 		return nil, err
 	}
-	s := &Store{root: root, lock: lock, state: State{Version: 1, Files: map[string]p.Manifest{}, Uploads: map[string]p.Upload{}, Chunks: map[string]Record{}}}
+	s := &Store{root: root, lock: lock, state: State{Version: 2, PathVersions: map[string]string{}, Files: map[string]p.Manifest{}, Uploads: map[string]p.Upload{}, Chunks: map[string]Record{}}}
 	data, err := os.ReadFile(filepath.Join(root, "metadata.json"))
 	if err == nil {
-		err = json.Unmarshal(data, &s.state)
+		var saved checkpoint
+		err = json.Unmarshal(data, &saved)
+		if err == nil {
+			hash := sha256.Sum256(saved.State)
+			if hex.EncodeToString(hash[:]) != saved.SHA256 {
+				err = fmt.Errorf("metadata checkpoint checksum mismatch")
+			} else {
+				err = json.Unmarshal(saved.State, &s.state)
+			}
+		}
 	} else if os.IsNotExist(err) {
 		err = nil
 	}
-	if err == nil && (s.state.Version != 1 || s.state.Files == nil || s.state.Uploads == nil || s.state.Chunks == nil) {
+	if err == nil && ((s.state.Version != 1 && s.state.Version != 2) || s.state.Files == nil || s.state.Uploads == nil || s.state.Chunks == nil) {
 		err = fmt.Errorf("invalid metadata checkpoint")
+	}
+	if err == nil && s.state.Version == 1 {
+		// Upgrade the initial lab checkpoint without deleting existing files or uploads.
+		s.state.PathVersions = map[string]string{}
+		for path, file := range s.state.Files {
+			s.state.PathVersions[path] = file.Generation
+		}
+		s.state.Version = 2
+		encoded, encodeErr := encodeCheckpoint(s.state)
+		if encodeErr != nil {
+			err = encodeErr
+		} else {
+			err = durable.Replace(filepath.Join(root, "metadata.json"), encoded)
+		}
+	}
+	if err == nil && s.state.PathVersions == nil {
+		err = fmt.Errorf("missing namespace versions")
 	}
 	if err != nil {
 		durable.Unlock(lock)
 		return nil, fmt.Errorf("open metadata: %w", err)
 	}
 	return s, nil
+}
+func encodeCheckpoint(state State) ([]byte, error) {
+	data, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+	hash := sha256.Sum256(data)
+	return json.Marshal(checkpoint{State: data, SHA256: hex.EncodeToString(hash[:])})
 }
 func clone(state State) (State, error) {
 	var result State
@@ -100,7 +142,11 @@ func (s *Store) update(change func(*State) error) error {
 		return nil
 	}
 	// On any persistence error stop serving metadata: rename/fsync failures can have ambiguous durability.
-	if err = durable.Replace(filepath.Join(s.root, "metadata.json"), data); err != nil {
+	encoded, err := encodeCheckpoint(next)
+	if err != nil {
+		return err
+	}
+	if err = durable.Replace(filepath.Join(s.root, "metadata.json"), encoded); err != nil {
 		s.poisoned = err
 		return fmt.Errorf("persist metadata: %w", err)
 	}
@@ -179,7 +225,7 @@ func (s *Store) Commit(id string, now int64) (p.Manifest, error) {
 		if u.Status != "pending" || u.ExpiresAt <= now {
 			return p.Error(409, "upload is no longer active")
 		}
-		if state.Files[u.Path].Generation != u.Base {
+		if state.PathVersions[u.Path] != u.Base {
 			return p.Error(409, "file changed during upload")
 		}
 		u.Status = "committed"
@@ -187,6 +233,7 @@ func (s *Store) Commit(id string, now int64) (p.Manifest, error) {
 		state.Uploads[id] = u
 		result = manifest(u)
 		state.Files[u.Path] = result
+		state.PathVersions[u.Path] = u.Generation
 		return nil
 	})
 	return result, err
@@ -215,6 +262,7 @@ func (s *Store) Delete(path, generation string) error {
 			return p.Error(409, "file changed")
 		}
 		delete(state.Files, path)
+		state.PathVersions[path] = p.NewID()
 		return nil
 	})
 }
